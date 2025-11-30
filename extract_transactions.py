@@ -42,6 +42,12 @@ def extract_item_name(item):
             if publisher_name:
                 return publisher_name
     
+    publisher_div = item.find('div', class_='pli-publisher')
+    if publisher_div:
+        publisher_name = publisher_div.get_text(strip=True)
+        if publisher_name and publisher_name != item_name:
+            return f"{publisher_name} - {item_name}"
+    
     return item_name
 
 
@@ -257,7 +263,7 @@ def generate_summary_report(transactions, output_file):
         }}
         h1 {{
             color: #333;
-            border-bottom: 3px solid #steelblue;
+            border-bottom: 3px solid steelblue;
             padding-bottom: 10px;
         }}
         h2 {{
