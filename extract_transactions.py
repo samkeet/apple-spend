@@ -129,6 +129,16 @@ def extract_transactions(html_file):
     return transactions
 
 
+def normalize_item_name_for_summary(item_name):
+    """
+    Normalize item names for summarization purposes.
+    Combines all iCloud+ transactions into a single bucket.
+    """
+    if 'iCloud+' in item_name:
+        return 'iCloud+'
+    return item_name
+
+
 def write_csv(transactions, output_file):
     print(f"Writing {len(transactions)} transactions to {output_file}")
     
@@ -153,9 +163,11 @@ def analyze_repeated_transactions(transactions):
     
     for transaction in transactions:
         item_name = transaction['item_name']
+        # Normalize item name for grouping (combines iCloud+ variants)
+        normalized_name = normalize_item_name_for_summary(item_name)
         amount = float(transaction['amount'].replace('$', ''))
-        item_stats[item_name]['count'] += 1
-        item_stats[item_name]['total_amount'] += amount
+        item_stats[normalized_name]['count'] += 1
+        item_stats[normalized_name]['total_amount'] += amount
     
     repeated = [
         {
