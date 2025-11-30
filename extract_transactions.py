@@ -83,6 +83,23 @@ def extract_amount(price_element):
     return None
 
 
+def extract_icon_path(item):
+    """
+    Extract icon path from pli-artwork img tag.
+    Returns the src attribute value or None if not found.
+    """
+    artwork_div = item.find('div', class_='pli-artwork')
+    if not artwork_div:
+        return None
+    
+    img_tag = artwork_div.find('img')
+    if not img_tag:
+        return None
+    
+    icon_path = img_tag.get('src', '').strip()
+    return icon_path if icon_path else None
+
+
 def extract_transactions(html_file):
     transactions = []
     
@@ -119,11 +136,14 @@ def extract_transactions(html_file):
             if amount is None:
                 continue
             
+            icon_path = extract_icon_path(item)
+            
             transactions.append({
                 'date': formatted_date,
                 'item_name': item_name,
                 'amount': amount,
-                'is_subscription': is_subscription_item(item)
+                'is_subscription': is_subscription_item(item),
+                'icon_path': icon_path
             })
     
     return transactions
@@ -132,10 +152,12 @@ def extract_transactions(html_file):
 def normalize_item_name_for_summary(item_name):
     """
     Normalize item names for summarization purposes.
-    Combines all iCloud+ transactions into a single bucket.
+    Combines all iCloud+ and Pokémon GO transactions into single buckets.
     """
     if 'iCloud+' in item_name:
         return 'iCloud+'
+    if 'Pokémon GO' in item_name or 'PokéCoins' in item_name:
+        return 'Pokémon GO'
     return item_name
 
 
@@ -194,6 +216,24 @@ def analyze_yearly_transactions(transactions):
     return dict(sorted(yearly_stats.items()))
 
 
+def analyze_monthly_transactions(transactions):
+    """
+    Analyze transactions by month.
+    Returns a dictionary with month (YYYY-MM) as key and dict with 'count' and 'total_amount' as values.
+    """
+    monthly_stats = defaultdict(lambda: {'count': 0, 'total_amount': 0.0})
+    
+    for transaction in transactions:
+        # Extract year-month from date (format: YYYY-MM-DD)
+        year_month = transaction['date'][:7]  # Gets YYYY-MM
+        amount = float(transaction['amount'].replace('$', ''))
+        monthly_stats[year_month]['count'] += 1
+        monthly_stats[year_month]['total_amount'] += amount
+    
+    # Sort by month and convert to regular dict
+    return dict(sorted(monthly_stats.items()))
+
+
 def create_repeated_transactions_chart(repeated_data, top_n=20):
     if not repeated_data:
         return None
@@ -243,9 +283,47 @@ def create_yearly_chart(yearly_data):
     return img_base64
 
 
+def create_monthly_chart(monthly_data):
+    """
+    Create a bar chart showing transaction count per month.
+    """
+    if not monthly_data:
+        return None
+    
+    months = list(monthly_data.keys())
+    counts = [monthly_data[month]['count'] for month in months]
+    
+    # Format month labels for better readability (YYYY-MM -> MMM YYYY)
+    from datetime import datetime
+    formatted_months = []
+    for month_str in months:
+        try:
+            dt = datetime.strptime(month_str, '%Y-%m')
+            formatted_months.append(dt.strftime('%b %Y'))
+        except:
+            formatted_months.append(month_str)
+    
+    plt.figure(figsize=(12, 6))
+    plt.bar(range(len(months)), counts, color='steelblue')
+    plt.xlabel('Month')
+    plt.ylabel('Transaction Count')
+    plt.title('Transaction Count by Month')
+    plt.xticks(range(len(months)), formatted_months, rotation=45, ha='right')
+    plt.tight_layout()
+    
+    buf = BytesIO()
+    plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+    plt.close()
+    
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+    return img_base64
+
+
 def generate_summary_report(transactions, output_file):
     repeated_data = analyze_repeated_transactions(transactions)
     yearly_data = analyze_yearly_transactions(transactions)
+    monthly_data = analyze_monthly_transactions(transactions)
     
     total_transactions = len(transactions)
     total_amount = sum(float(t['amount'].replace('$', '')) for t in transactions)
@@ -254,6 +332,14 @@ def generate_summary_report(transactions, output_file):
     
     repeated_chart = create_repeated_transactions_chart(repeated_data)
     yearly_chart = create_yearly_chart(yearly_data)
+    monthly_chart = create_monthly_chart(monthly_data)
+    
+    # Get icon paths for repeated transactions (use first transaction's icon for each normalized item)
+    item_icons = {}
+    for transaction in transactions:
+        normalized_name = normalize_item_name_for_summary(transaction['item_name'])
+        if normalized_name not in item_icons and transaction.get('icon_path'):
+            item_icons[normalized_name] = transaction['icon_path']
     
     html_content = f"""<!DOCTYPE html>
 <html>
@@ -331,7 +417,49 @@ def generate_summary_report(transactions, output_file):
             border: 1px solid #ddd;
             border-radius: 5px;
         }}
+        .item-icon {{
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            margin-right: 10px;
+            vertical-align: middle;
+        }}
+        .item-name-cell {{
+            display: flex;
+            align-items: center;
+        }}
+        .collapsible {{
+            cursor: pointer;
+            user-select: none;
+            position: relative;
+            padding: 10px 0;
+        }}
+        .collapsible::before {{
+            content: '▼';
+            position: absolute;
+            left: -20px;
+            transition: transform 0.3s;
+        }}
+        .collapsible.collapsed::before {{
+            transform: rotate(-90deg);
+        }}
+        .collapsible-content {{
+            max-height: 10000px;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }}
+        .collapsible-content.collapsed {{
+            max-height: 0;
+            overflow: hidden;
+        }}
     </style>
+    <script>
+        function toggleSection(element) {{
+            const content = element.nextElementSibling;
+            element.classList.toggle('collapsed');
+            content.classList.toggle('collapsed');
+        }}
+    </script>
 </head>
 <body>
     <div class="container">
@@ -356,7 +484,8 @@ def generate_summary_report(transactions, output_file):
             </div>
         </div>
         
-        <h2>Repeated Transactions</h2>
+        <h2 class="collapsible" onclick="toggleSection(this)">Repeated Transactions</h2>
+        <div class="collapsible-content">
         <p>Items purchased more than once, sorted by total amount spent.</p>
 """
     
@@ -373,9 +502,13 @@ def generate_summary_report(transactions, output_file):
             <tbody>
 """
         for item in repeated_data:
+            icon_html = ""
+            if item['item_name'] in item_icons:
+                icon_path = item_icons[item['item_name']]
+                icon_html = f'<img src="{icon_path}" alt="" class="item-icon">'
             html_content += f"""
                 <tr>
-                    <td>{item['item_name']}</td>
+                    <td class="item-name-cell">{icon_html}{item['item_name']}</td>
                     <td>{item['count']}</td>
                     <td>${item['total_amount']:,.2f}</td>
                 </tr>
@@ -395,7 +528,9 @@ def generate_summary_report(transactions, output_file):
         html_content += "<p>No repeated transactions found.</p>"
     
     html_content += """
-        <h2>Yearly Spending</h2>
+        </div>
+        <h2 class="collapsible" onclick="toggleSection(this)">Yearly Spending</h2>
+        <div class="collapsible-content">
         <p>Total spending aggregated by year.</p>
 """
     
@@ -430,6 +565,55 @@ def generate_summary_report(transactions, output_file):
 """
     
     html_content += """
+        </div>
+        <h2 class="collapsible" onclick="toggleSection(this)">Monthly Transaction Activity</h2>
+        <div class="collapsible-content">
+        <p>Transaction count and spending by month.</p>
+"""
+    
+    if monthly_data:
+        html_content += """
+        <table>
+            <thead>
+                <tr>
+                    <th>Month</th>
+                    <th>Transaction Count</th>
+                    <th>Total Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+"""
+        # Format month labels for display
+        from datetime import datetime
+        for month_str, stats in monthly_data.items():
+            try:
+                dt = datetime.strptime(month_str, '%Y-%m')
+                month_display = dt.strftime('%b %Y')
+            except:
+                month_display = month_str
+            html_content += f"""
+                <tr>
+                    <td>{month_display}</td>
+                    <td>{stats['count']}</td>
+                    <td>${stats['total_amount']:,.2f}</td>
+                </tr>
+"""
+        html_content += """
+            </tbody>
+        </table>
+"""
+        
+        if monthly_chart:
+            html_content += f"""
+        <div class="chart-container">
+            <img src="data:image/png;base64,{monthly_chart}" alt="Monthly Transaction Chart">
+        </div>
+"""
+    else:
+        html_content += "<p>No monthly data available.</p>"
+    
+    html_content += """
+        </div>
     </div>
 </body>
 </html>
