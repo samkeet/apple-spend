@@ -88,7 +88,7 @@ def extract_transactions(html_file):
     
     print(f"Reading HTML file: {html_file}")
     with open(html_file, 'r', encoding='utf-8') as f:
-        soup = BeautifulSoup(f, 'html.parser')
+        soup = BeautifulSoup(f, 'lxml')
     
     purchase_divs = soup.find_all('div', class_='purchase')
     print(f"Found {len(purchase_divs)} purchase entries")
